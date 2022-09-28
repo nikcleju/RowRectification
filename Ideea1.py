@@ -5,8 +5,10 @@ import skimage as ski
 import skimage.color, skimage.filters
 
 import matplotlib
-matplotlib.use('QtAgg')  # non-interactive
+matplotlib.use('Qt5Agg')  # non-interactive
 import matplotlib.pyplot as plt
+
+from utils import ridge_following
 
 # %%
 I = plt.imread('Rows.png')
@@ -39,6 +41,17 @@ plt.show()
 If = ski.filters.gaussian(I, sigma=[5, 50])
 plt.imshow(If, cmap='gray')
 plt.show()
+
+# Follow ridge
+ridge = ridge_following(If, [180,180])
+
+for c in range(If.shape[1]):
+    If[ridge[c],c] = 0
+plt.imshow(If, cmap='gray')
+plt.show() 
+
+
+
 
 # plot surface
 fig = plt.figure()
