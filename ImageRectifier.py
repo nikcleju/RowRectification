@@ -1,4 +1,5 @@
 import cv2
+import math
 import matplotlib.pyplot as plt
 import numpy as np
 import pwlf
@@ -54,23 +55,51 @@ class Ridge:
         return Ridge(cumsum, self.y)
 
     # Smoothing
-    def smooth_univariatespline(self, k=1, s=None):
+    def smooth_univariatespline(self, k=1, s=None, endpoints=[], predict_each_point=False, clip_y=None):
 
         s = len(self.x)/2 if s is None else s
-
         spl = sp.interpolate.UnivariateSpline(self.x, self.y, k=k, s=s)
-        new_y = [spl(x) for x in self.x]
+        
+        # Reference x  = the knots
+        new_x = spl.get_knots()
+        
+        # Add extremes to x, only if they are not already in x (distance > epsilon)
+        if endpoints:
+            if np.abs(endpoints[0] - new_x[0]) > 1e-3:
+                new_x = np.insert(new_x,0,endpoints[0])
+            if np.abs(endpoints[1] - new_x[-1]) > 1e-3:                
+                new_x = np.append(new_x,endpoints[1])
 
-        return Ridge(self.x, new_y)
+        # Find y values
+        if predict_each_point:
+            new_y = spl(np.arange(new_x[0], new_x[-1]))
+        else:
+            new_y = spl(new_x)
+
+        # Limit values in y to image height
+        # Values may exceed image in endpoints, due to extrapolation
+        if clip_y is not None:
+            new_y = np.clip(new_y, clip_y[0], clip_y[1])
+
+        if len(self.x) != len(self.y):
+            print("ERROR")
+            print(self.x)
+            print(self.y)
+
+        # Make x and y into np arrays
+        new_x = np.array(new_x)
+        new_y = np.array(new_y)
+
+        return Ridge(new_x, new_y)
 
 
     # Smoothing
-    def smooth_pwlf(self, n=4, endpoints=[], predict_each_point=False):
+    def smooth_pwlf(self, n=4, endpoints=[], predict_each_point=False, clip_y=None):
 
         # initialize piecewise linear fit with your x and y data
         my_pwlf = pwlf.PiecewiseLinFit(self.x, self.y)
 
-        # fit the data for four line segments
+        # fit the data for n line segments
         knots = my_pwlf.fitfast(n, pop=3)  # TODO: default pop=2, check this
 
         # Add extremes to knots
@@ -78,12 +107,28 @@ class Ridge:
             knots = np.insert(knots,0,endpoints[0])
             knots = np.append(knots,endpoints[1])
         
+        # Find y values
         if predict_each_point:
-            y = my_pwlf.predict(np.arange(knots[0], knots[-1]))
+            new_y = my_pwlf.predict(np.arange(knots[0], knots[-1]))
         else:
-            y = my_pwlf.predict(knots)
+            new_y = my_pwlf.predict(knots)
+
+        # Limit values in y to image height
+        # Values may exceed image in endpoints, due to extrapolation
+        if clip_y is not None:
+            new_y = np.clip(new_y, clip_y[0], clip_y[1])
         
-        return Ridge(knots,y)
+        return Ridge(knots,new_y)
+
+    def to_numpy(self):
+        #return np.ndarray([self.x, self.y]).T
+
+        if len(self.x) != len(self.y):
+            print("ERROR")
+            print(self.x)
+            print(self.y)
+
+        return np.vstack((self.x, self.y)).T
 
     # TODO: from dict etc
 
@@ -96,7 +141,7 @@ class RidgeExtractor:
     def __init__(self) -> None:
         self.gaussflt_sigma = [5,50]
 
-    def get_kernel_image(self, shape):
+    def get_image_kernel(self, shape):
         Idirac = np.zeros(shape)
         Idirac[shape[0]//2,shape[1]//2] = 1
         Ikernel = ski.filters.gaussian(Idirac, sigma=self.gaussflt_sigma)
@@ -127,7 +172,7 @@ class RidgeExtractor:
 
         return peaks, hist
 
-    def get_middleband_peaks_image(self, I):
+    def get_image_middleband_peaks(self, I):
         # Find starting points from a middle band
         peaks, hist = self._find_starting_points(I)
 
@@ -148,7 +193,8 @@ class RidgeExtractor:
         
         return ridges
 
-    def plot_ridges_on_image(self, ridges, I=None, shape=None, fg_color=0, bg_color=1, line=False):
+    @staticmethod
+    def get_image_with_ridges(ridges, I=None, shape=None, fg_color=0, bg_color=1, line=False):
 
         # Prepare background image
         if I is not None:
@@ -164,16 +210,11 @@ class RidgeExtractor:
         for ridge in ridges:
             if line:
                 for p1, p2 in pairwise(ridge):
-                    Iout = cv2.line(Iout, list(map(int,p1)), list(map(int,p2)), color=(0,0,0))
+                    Iout = cv2.line(Iout, list(map(int,p1)), list(map(int,p2)), color=fg_color)
             else:
                 for x,y in ridge:
                     Iout[int(y), int(x)] = fg_color
-        # for c in range(I.shape[1]):
-        #     if ridge[c] != -1:
-        #         Imask[ridge[c],c] = 0
-
-        # plt.figure()
-        # plt.imshow(Imask, cmap='gray')        
+        
         return Iout
 
     @staticmethod
@@ -240,35 +281,94 @@ class RidgeExtractor:
 #========================
 
 class DistortionPoly(sklearn.base.BaseEstimator):
-    def __init__(self, n_segments) -> None:
+    def __init__(self, n_segments, n_poly_sides=4) -> None:
         super().__init__()
-        self.n_segments = n_segments
+        self.n_segments  = n_segments
+        self.n_polysides = n_poly_sides
 
+        self.ridges_ = None
+        self.target_ridges_ = None
         self.polys_src_ = None
         self.polys_dst_ = None
 
     def fit(self, ridges, target_shape):
 
         # Add top and bottom margins as ridges
-        ridges.insert(0, Ridge(ridges[0].x, [0] * len(ridges[0].y)))
-        ridges.append(Ridge(ridges[-1].x, [target_shape[0]] * len(ridges[0].y)))
+        self.ridges_ = ridges
+        self.ridges_.insert(0, Ridge(ridges[0].x, [0] * len(ridges[0].y)))
+        self.ridges_.append(Ridge(ridges[-1].x, [target_shape[0]-1] * len(ridges[-1].y)))
 
-        # Poligonify original ridges in the image
-        self.polys_src_ = []
-        for ridge1, ridge2 in pairwise(ridges):
-            for (topleft, topright), (botleft, botright) in zip(pairwise(ridge1), pairwise(ridge2)):
-                self.polys_src_.append([topleft, topright, botright, botleft])
+        # What is the target y in the rectified image?
+        conf_target_ridge_y = 'mean' # or 'first
+        if conf_target_ridge_y == 'first':
+            target_ridge_y = [ridge.y[0] for ridge in self.ridges_]
+        elif conf_target_ridge_y == 'last':
+            target_ridge_y = [ridge.y[-1] for ridge in self.ridges_]
+        elif conf_target_ridge_y == 'mean':
+            target_ridge_y = [np.mean(ridge.y) for ridge in self.ridges_]
 
         # Compute target ridges
-        # x values are normalized to total length, y values are all equal to first y value of original ridge (horizontal)
+        # x values are normalized to total length, y values are all equal (horizontal) (ridge.y[0], or mean y)
         target_length = target_shape[1]
-        target_ridges = [Ridge( ridge.normalize().x * target_length, [ridge.y[0]] * len(ridge.y)) for ridge in ridges]
+        self.target_ridges_ = [Ridge( ridge.normalize().x * (target_length-1), [tgt_y] * len(ridge.y)) for ridge, tgt_y in zip(self.ridges_, target_ridge_y)]
 
-        # Poligonify target ridges
+        # Poligonify original ridges in the image as well as the target ridges
+        self.polys_src_ = []
         self.polys_dst_ = []
-        for ridge1, ridge2 in pairwise(target_ridges):
-            for (topleft, topright), (botleft, botright) in zip(pairwise(ridge1), pairwise(ridge2)):
-                self.polys_dst_.append([topleft, topright, botright, botleft])
+
+        if self.n_polysides == 4:
+            # Create 4-sided polygons
+            for ridge1, ridge2 in pairwise(self.ridges_):
+                for (topleft, topright), (botleft, botright) in zip(pairwise(ridge1), pairwise(ridge2)):
+                    self.polys_src_.append([topleft, topright, botright, botleft])
+
+            for ridge1, ridge2 in pairwise(self.target_ridges_):
+                for (topleft, topright), (botleft, botright) in zip(pairwise(ridge1), pairwise(ridge2)):
+                    self.polys_dst_.append([topleft, topright, botright, botleft])
+        
+        elif self.n_polysides == 3:
+
+            # # Get triangular mesh with OpenCV
+            # points_src_all = np.concatenate([r.to_numpy() for r in        self.ridges_], axis=0)
+            # points_dst_all = np.concatenate([r.to_numpy() for r in self.target_ridges_], axis=0)
+            # # Create triangles
+            # for indices in get_triangulation_indices(points_src_all):
+            #     # Get triangles from indices
+            #     src_triangle = points_src_all[indices]
+            #     dst_triangle = points_dst_all[indices]
+            #     self.polys_src_.append(src_triangle)
+            #     self.polys_dst_.append(dst_triangle)
+
+            # # Create two 3-sided polygons between two ridges
+            # for ridge1, ridge2 in pairwise(self.ridges_):
+            #     for (topleft, topright), (botleft, botright) in zip(pairwise(ridge1), pairwise(ridge2)):
+            #         self.polys_src_.append([topleft, topright, botright])
+            #         self.polys_src_.append([topleft, botleft, botright])
+            #
+            # for ridge1, ridge2 in pairwise(self.target_ridges_):
+            #     for (topleft, topright), (botleft, botright) in zip(pairwise(ridge1), pairwise(ridge2)):
+            #         self.polys_dst_.append([topleft, topright, botright])
+            #         self.polys_dst_.append([topleft, botleft, botright])
+
+            # Get triangular mesh between two ridges only, with OpenCV
+            for (src_ridge1, src_ridge2), (dst_ridge1, dst_ridge2) in zip(pairwise(self.ridges_), pairwise(self.target_ridges_)):
+                points_src_all = np.concatenate([src_ridge1.to_numpy(), src_ridge2.to_numpy()])
+                points_dst_all = np.concatenate([dst_ridge1.to_numpy(), dst_ridge2.to_numpy()])
+                # Create triangles
+                for indices in get_triangulation_indices(points_dst_all):
+                    # Get triangles from indices
+                    self.polys_src_.append( points_src_all[indices] )
+                    self.polys_dst_.append( points_dst_all[indices] )
+
+                    p1,p2,p3 = tuple(points_src_all[indices])
+                    if area_triangle(p1,p2,p3) < 1:
+                        print(f"Degenerate src triangle: {p1}, {p2}, {p3}, area={area_triangle(p1,p2,p3)}")
+                    p1,p2,p3 = tuple(points_dst_all[indices])                        
+                    if area_triangle(p1,p2,p3) < 1:
+                        print(f"Degenerate dst triangle: {p1}, {p2}, {p3}, area={area_triangle(p1,p2,p3)}")
+
+        else:
+            raise ValueError(f"n_poly_sides must be 3 or 4, is {self.n_poly_sides}")
 
     def __iter__(self): 
         if not hasattr(self, 'polys_src_') or not hasattr(self, 'polys_dst_'):
@@ -276,7 +376,7 @@ class DistortionPoly(sklearn.base.BaseEstimator):
         
         return zip(self.polys_src_, self.polys_dst_)
 
-    def plot_polys_on_image(self, polys='src', I=None, shape=None, fg_color=0, bg_color=1, thickness=1):
+    def get_image_with_polys(self, polys='src', I=None, shape=None, fg_color=0, bg_color=1, thickness=1):
 
         # Prepare background image
         if I is not None:
@@ -300,11 +400,73 @@ class DistortionPoly(sklearn.base.BaseEstimator):
         # Prepare polys in OpenCV expected format
         # list with arrays of size (4,1,2), that's how OpenCV bloody wants it
         polys_cv2 = [np.array(poly, dtype=np.int).reshape((-1, 1, 2)) for poly in polys ] 
-        Iout = cv2.polylines(Iout, polys_cv2, isClosed=False, color=fg_color, thickness=thickness)
+        Iout = cv2.polylines(Iout, polys_cv2, isClosed=True, color=fg_color, thickness=thickness)
   
         return Iout        
 
+    def get_image_with_shifts(self, I=None, shape=None, fg_color=0, bg_color=1, thickness=1):
+
+        # Prepare background image
+        if I is not None:
+            Iout = np.copy(I)
+        if I is None and shape is not None:
+            Iout = np.zeros(shape) + bg_color
+        elif I is None and shape is None:
+            #max_x = max([max([x for x in ridge.x]) for ridge in ridges])
+            #max_y = max([max([y for y in ridge.y]) for ridge in ridges])
+            #Iout = np.zeros((max_y, max_x))  + bg_color      
+            raise NotImplementedError("Not implemented yet, TODO")
+
+        for ridge_src, ridge_dst in zip(self.ridges_, self.target_ridges_):
+            for p_src, p_dst in zip(ridge_src, ridge_dst):
+                Iout = cv2.line(Iout, list(map(int,p_src)), list(map(int,p_dst)), color=fg_color)
+
+        return Iout    
+
+def get_triangulation_indices(points):
+    """Get indices triples for every triangle
+    """
+    # Make points int
+    points = np.int32(points)
+
+    # Bounding rectangle
+    # HACK: +1 otherwise final points raise error with insert()
+    bounding_rect = (*points.min(axis=0), *points.max(axis=0)+1)
+    #bounding_rect = (*points.min(axis=0), *points.max(axis=0))
+
+    # Triangulate all points
+    subdiv = cv2.Subdiv2D(bounding_rect)
+    for p in points:
+        subdiv.insert([int(p[0]), int(p[1])])
+
+    # Iterate over all triangles
+    for x1, y1, x2, y2, x3, y3 in subdiv.getTriangleList():
+        # Get index of all points
+        yield [(points==point).all(axis=1).nonzero()[0][0] for point in [(x1,y1), (x2,y2), (x3,y3)]]
+
+
+def crop_to_poly(img, poly):
+    """Crop image to a polygon
+    """
+    # Get bounding rectangle
+    bounding_rect = cv2.boundingRect(np.array(poly, dtype=int))
+
+    # Crop image to bounding box
+    img_cropped = img[bounding_rect[1]:bounding_rect[1] + bounding_rect[3],
+                      bounding_rect[0]:bounding_rect[0] + bounding_rect[2]]
+    # Move triangle to coordinates in cropped image
+    poly_cropped = [(point[0]-bounding_rect[0], point[1]-bounding_rect[1]) for point in poly]
+    return poly_cropped, img_cropped
+
+def area_triangle(p1, p2, p3):
+
+    side1 = np.linalg.norm(p1-p2)
+    side2 = np.linalg.norm(p2-p3)
+    side3 = np.linalg.norm(p1-p3)
     
+    s = (side1 + side2 + side3) / 2                         # Semi-perimeter
+    area = math.sqrt((s*(s-side1)*(s-side2)*(s-side3)))     # Area
+    return area
 
 #========================
 # Image rectification    
@@ -318,55 +480,74 @@ class ImageRectifierPoly:
     def fit(self, I, ridges):
         self.distortion_est_.fit(ridges, target_shape=I.shape)
 
-        # DEBUG
-        Isrc = self.distortion_est_.plot_polys_on_image('src', I*255)
-        cv2.imwrite('a.png', Isrc)
-        Idst = self.distortion_est_.plot_polys_on_image('dst', I*255)
-        cv2.imwrite('b.png', Idst)
-        
     def transform(self, I):
         return rectify_image(I, self.distortion_est_.polys_src_, self.distortion_est_.polys_dst_)
 
 
 # Rectify a 3 or 4-side polygon
-def rectify_poly(I, poly_src, poly_dst):
+def rectify_poly(I, poly_src, poly_dst, Iout_shape=None):
     
+    if Iout_shape is None:
+        Iout_shape = I.shape[1::-1]
+
     #assert len(poly_src) == len(poly_dst), "poly_src and poly_dst have different len"
     if len(poly_src) == 4 and len(poly_dst) == 4:
         # use perspective transformation for 4-side polygons
         persp_mat = cv2.getPerspectiveTransform(poly_src, poly_dst, cv2.DECOMP_LU)
-        Ipersp = cv2.warpPerspective(I, persp_mat, I.shape[1::-1], flags=cv2.INTER_LINEAR)
+        Irectif = cv2.warpPerspective(I, persp_mat, Iout_shape, flags=cv2.INTER_LINEAR)
     elif len(poly_src) == 3 and len(poly_dst) == 3:
-        raise NotImplementedError("Transformation for triangles not implemented yet")
+        #raise NotImplementedError("Transformation for triangles not implemented yet")
+
+        affine_mat = cv2.getAffineTransform(poly_src, poly_dst)
+        Irectif = cv2.warpAffine(I, affine_mat, Iout_shape, None, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101 )        
     else:
         raise NotImplementedError("Transformation for this polygon length not implemented")
     
-    return Ipersp    
+    return Irectif    
 
 def rectify_image(I, polys_src, polys_dst):
 
     # Prepare new matrix
     Iout = np.zeros_like(I)
 
+    # HACK
+    crop_poly = False
+
     for poly_src, poly_dst in zip(polys_src, polys_dst):
-        Iwarped = rectify_poly(I, np.array(poly_src, dtype = "float32"), np.array(poly_dst, dtype = "float32")) 
+
+        if crop_poly:
+            # Crop the image around the polygon, for efficiency
+            poly_src_cropped, src_img_cropped = crop_to_poly(I, poly_src)
+            poly_dst_cropped, dst_img_cropped = crop_to_poly(Iout, poly_dst)
+        else:
+            poly_src_cropped, src_img_cropped = poly_src, I
+            poly_dst_cropped, dst_img_cropped = poly_dst, Iout
             
-        # Create mask for the triangle we want to transform
+        Iwarped = rectify_poly(src_img_cropped, 
+                               np.array(poly_src_cropped, dtype = "float32"), 
+                               np.array(poly_dst_cropped, dtype = "float32"), 
+                               (dst_img_cropped.shape[1], dst_img_cropped.shape[0])
+                               ) 
+            
+        # # Calculate transfrom to warp from old image to new
+        # transform = cv2.getAffineTransform(np.float32(src_triangle_cropped), np.float32(dst_triangle_cropped))
+        # # Warp image
+        # dst_img_warped = cv2.warpAffine(src_img_cropped, transform, (dst_img_cropped.shape[1], dst_img_cropped.shape[0]), None, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101 )
+        # # Create mask for the triangle we want to transform
         # mask = np.zeros(dst_img_cropped.shape, dtype = np.uint8)
         # cv2.fillConvexPoly(mask, np.int32(dst_triangle_cropped), (1.0, 1.0, 1.0), 16, 0);
-
         # # Delete all existing pixels at given mask
         # dst_img_cropped*=1-mask
         # # Add new pixels to masked area
-        # dst_img_cropped+=dst_img_warped*mask    
+        # dst_img_cropped+=dst_img_warped*mask
 
-        mask = np.zeros_like(Iwarped, dtype=np.uint8)
-        cv2.fillConvexPoly(mask, np.int32(poly_dst), (1.0, 1.0, 1.0), 16, 0);
+        mask = np.zeros_like(dst_img_cropped, dtype=np.uint8)
+        cv2.fillConvexPoly(mask, np.int32(poly_dst_cropped), (1.0, 1.0, 1.0), 16, 0);
 
         # Delete all existing pixels at given mask
-        Iout*=1-mask
+        dst_img_cropped*=1-mask
         # Add new pixels to masked area
-        Iout+=Iwarped*mask    
+        dst_img_cropped+=Iwarped*mask    
 
     return Iout
 
@@ -375,12 +556,17 @@ def rectify_image(I, polys_src, polys_dst):
 # Top-level row rectification class
 #========================
 
-class RowRectifierPwlf(sklearn.base.BaseEstimator, 
-                       sklearn.base.TransformerMixin):
+class RowRectifier(sklearn.base.BaseEstimator, 
+                   sklearn.base.TransformerMixin):
 
-    def __init__(self, n_segments) -> None:
+    def __init__(self, smoothing_method, n_segments=None, n_poly_sides=None, k=None, s=None) -> None:
         super().__init__()
-        self.n_segments = n_segments
+        self.smoothing_method = smoothing_method
+
+        self.n_segments   = n_segments
+        self.n_poly_sides = n_poly_sides
+
+        self.s = s
 
         self.ir_ = None
 
@@ -392,12 +578,34 @@ class RowRectifierPwlf(sklearn.base.BaseEstimator,
         ridges = extr.extract_ridges(Ifilt)
 
         # smooth ridges
-        ridges_pwlf = [ridge.smooth_pwlf(n=self.n_segments, endpoints=[0, I.shape[1]-1]) for ridge in ridges]
+        if self.smoothing_method == 'pwlf':
+            ridges_smoothed = [ridge.smooth_pwlf(n=self.n_segments, endpoints=[0, I.shape[1]-1], clip_y=[0, I.shape[0]]) for ridge in ridges]
+        elif self.smoothing_method == 'univar_spl':
+            # k must be for polygonal rectification
+            ridges_smoothed = [ridge.smooth_univariatespline(k=1, s=self.s, endpoints=[0, I.shape[1]-1], clip_y=[0, I.shape[0]]) for ridge in ridges]
 
         # 2. Rectify 
-        self.ir_ = ImageRectifierPoly(DistortionPoly(n_segments=4))
-        self.ir_.fit(I, ridges=ridges_pwlf)
+        self.ir_ = ImageRectifierPoly(DistortionPoly(n_segments=self.n_segments, n_poly_sides=self.n_poly_sides))
+        self.ir_.fit(I, ridges=ridges_smoothed)
 
-    def transform(self, I):
-        return self.ir_.transform(I)
+    def transform(self, I, return_intermediates=False):
+        Iout = self.ir_.transform(I)
 
+        if return_intermediates:
+            # Source image with polys
+            Isrc_polys = self.ir_.distortion_est_.get_image_with_polys('src', I*255)
+
+            # Source image with ridges and shifts
+            Isrc_ridges = RidgeExtractor.get_image_with_ridges(self.ir_.distortion_est_.ridges_, I*255, fg_color=(0,0,255), line=True)
+            Isrc_ridges = self.ir_.distortion_est_.get_image_with_shifts(Isrc_ridges, fg_color=(255,0,0))
+            
+            # Rectified image with polys
+            Idst_polys = self.ir_.distortion_est_.get_image_with_polys('dst', Iout*255)
+
+            # Rectified image with ridges
+            Idst_ridges = RidgeExtractor.get_image_with_ridges(self.ir_.distortion_est_.target_ridges_, 255*Iout, fg_color=(0,0,255), line=True)
+
+            return Iout, Isrc_polys, Isrc_ridges, Idst_polys, Idst_ridges
+        
+        else:
+            return Iout
