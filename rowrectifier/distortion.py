@@ -1,10 +1,25 @@
+# Copyright (c) 2023 Nicolae Cleju <ncleju@etti.tuiasi.ro>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+
 import cv2
 import math
 import numpy as np
 import sklearn
 import sklearn.base
 
-from typing import Tuple, List, Sequence, Iterator, Optional, Union
+from typing import Tuple, Sequence, Iterator, Optional, Union
 from numpy.typing import ArrayLike, NDArray
 
 from itertools import pairwise
@@ -98,7 +113,7 @@ class Distortion(sklearn.base.BaseEstimator):
                               fg_color: Union[int, Tuple] = 0,
                               bg_color: Union[int, Tuple] = 1,
                               thickness: int = 1) -> NDArray:
-        """Returns an image with overlayed segments drawn between
+        """Returns an image with overlaid segments drawn between
         the matching original and target points.
         Useful for representing the dewarping.
 

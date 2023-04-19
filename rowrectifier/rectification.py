@@ -1,51 +1,184 @@
+# Copyright (c) 2023 Nicolae Cleju <ncleju@etti.tuiasi.ro>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
 import cv2
 import numpy as np
+
+from typing import Tuple, Sequence, Iterable, \
+    Iterator, Generator, Optional, Union, Any
+from numpy.typing import ArrayLike, NDArray
 
 from .distortion import Distortion, crop_to_poly
 
 class Rectifier:
+    """Encapsulates methods for image rectification, based on `Distortion`
+    objects.
+    """
 
-    def __init__(self, distortion):
+    def __init__(self, distortion: Distortion) -> None :
+        """Constructor
+
+        Parameters
+        ----------
+        distortion : Distortion
+            Underlying Distortion object
+        """
         self.distortion = distortion
 
-    def fit(self, I, ridges):
+    def fit(self,
+            I: ArrayLike,
+            ridges: Any) -> None:
+        """Fits rectification for an image.
+        Calls the underlying Distortion object fit().
+
+        Parameters
+        ----------
+        I : ArrayLike
+            Input image
+        ridges : Any
+            Set of ridges on the image, passed to Distortion.fit()
+        """
         self.distortion.fit(ridges, target_shape=I.shape)
 
     def transform():
         raise NotImplementedError("Must be overridden in derivated classes")
 
 class RectifierPoly(Rectifier):
-    def transform(self, I):
+    """Image rectification based on rectifying polynomials with OpenCV's
+    affine and perspective transformations.
+    """
+
+    def transform(self, I: ArrayLike) -> NDArray:
+        """Rectify an image.
+
+        Parameters
+        ----------
+        I : ArrayLike
+            Input image
+
+        Returns
+        -------
+        NDArray
+            Rectified image.
+        """
         return rectify_image(I, poly_pairs=self.distortion.matching_polys)
 
 class RectifierMap(Rectifier):
+    """Image rectification based on OpenCV's remapping,
+     based on spline approximations.
+    """
     def transform(self, I):
+        """Rectify an image.
+
+        Parameters
+        ----------
+        I : ArrayLike
+            Input image
+
+        Returns
+        -------
+        NDArray
+            Rectified image.
+        """
         map_x, map_y = self.distortion.get_maps()
         return cv2.remap(I, map_x, map_y, cv2.INTER_LINEAR)
 
+#===================
+# Helper functions
+#===================
 
-# Rectify a 3 or 4-side polygon
-def rectify_poly(I, poly_src, poly_dst, Iout_shape=None):
+def rectify_poly(I: ArrayLike,
+                 poly_src: Sequence,
+                 poly_dst: Sequence,
+                 Iout_shape=Sequence) -> NDArray:
+    """Rectify a 3 or 4-sides polygon
+
+    Parameters
+    ----------
+    I : ArrayLike
+        Input image
+    poly_src : Sequence
+        List of points defining the input polygon
+    poly_dst : Sequence
+        List of points defining the input polygon
+    Iout_shape : Sequence, optional
+        Shape of output image, by default None
+
+    Returns
+    -------
+    NDArray
+        Rectified image
+
+    Raises
+    ------
+    NotImplementedError
+        If the polygon has more than 3 or 4 points.
+    """
 
     if Iout_shape is None:
         Iout_shape = I.shape[1::-1]
 
     #assert len(poly_src) == len(poly_dst), "poly_src and poly_dst have different len"
+
     if len(poly_src) == 4 and len(poly_dst) == 4:
         # use perspective transformation for 4-side polygons
         persp_mat = cv2.getPerspectiveTransform(poly_src, poly_dst, cv2.DECOMP_LU)
         Irectif = cv2.warpPerspective(I, persp_mat, Iout_shape, flags=cv2.INTER_LINEAR)
-    elif len(poly_src) == 3 and len(poly_dst) == 3:
-        #raise NotImplementedError("Transformation for triangles not implemented yet")
 
+    elif len(poly_src) == 3 and len(poly_dst) == 3:
         affine_mat = cv2.getAffineTransform(poly_src, poly_dst)
         Irectif = cv2.warpAffine(I, affine_mat, Iout_shape, None, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101 )
+
     else:
         raise NotImplementedError("Transformation for this polygon length not implemented")
 
     return Irectif
 
-def rectify_image(I, polys_src=None, polys_dst=None, poly_pairs=None):
+def rectify_image(I: ArrayLike,
+                  polys_src: Optional[Iterable] = None,
+                  polys_dst: Optional[Iterable] = None,
+                  poly_pairs: Optional[Generator]=None):
+    """Rectify a full image be assembling rectified polygons.
+
+    Parameters
+    ----------
+    I : ArrayLike
+        Input image
+    polys_src : Optional[Iterable], optional
+        List of polygons in the original image.
+        If None, the matching polygons is generated by `poly_pairs`.
+        Defaults to None.
+    polys_dst : Optional[Iterable], optional
+        List of target (rectified) polygons.
+        If None, the matching polygons is generated by `poly_pairs`
+        Defaults to None.
+    poly_pairs : Optional[Generator], optional
+        A generator yielding matching polygons (source, destination).
+        If None, the polygons must pe provided in `polys_src` and `polys_dst`.
+        Defaults to None.
+
+    Returns
+    -------
+    NDArray
+        Rectified image
+
+    Raises
+    ------
+    ValueError
+        If both (`polys_src` and `polys_dst` are None) and `poly_pairs` is None.
+        No polygons are available
+    """
 
     # Prepare new matrix
     Iout = np.zeros_like(I)
@@ -57,7 +190,7 @@ def rectify_image(I, polys_src=None, polys_dst=None, poly_pairs=None):
     else:
         raise ValueError(f"Parameter combination not understood")
 
-    # HACK
+    # HACK. Try to make mor efficient. Disable for now.
     crop_poly = False
 
     for poly_src, poly_dst in poly_pairs:

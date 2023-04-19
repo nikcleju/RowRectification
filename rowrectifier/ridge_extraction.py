@@ -1,3 +1,17 @@
+# Copyright (c) 2023 Nicolae Cleju <ncleju@etti.tuiasi.ro>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,26 +21,85 @@ import skimage as ski
 
 from itertools import pairwise
 
+from typing import Tuple, List, Sequence, Iterable, \
+    Iterator, Generator, Optional, Union, Any
+from numpy.typing import ArrayLike, NDArray
+
+
 from .ridge import Ridge
 
 
 class RidgeExtractor:
-    def __init__(self) -> None:
-        self.gaussflt_sigma = [5,50]
+    """Extract ridges from images.
 
-    def get_image_kernel(self, shape):
+    Method:
+
+    1. Convert image to grayscale
+    2. Invert the image
+    3. Gaussian filtering
+    4. Identify peaks inside a band in the middle of the image
+    5. Follow ridges to the right and left
+    """
+    def __init__(self, gaussflt_sigma: Sequence = [5,50]) -> None:
+        """Constructor
+
+        Parameters
+        ----------
+        gaussflt_sigma : Sequence, optional
+            x and y sigma values for Gaussian filtering, by default [5,50]
+        """
+        self.gaussflt_sigma = gaussflt_sigma
+
+    def get_image_kernel(self, shape: Sequence) -> NDArray:
+        """Return an image displaying the kernel (i.e. impulse response)
+        used in gaussian filtering.
+
+        Parameters
+        ----------
+        shape : Sequence
+            The desired image size (height, width)
+
+        Returns
+        -------
+        NDArray
+            Image with the kernel of Gaussian filtering.
+        """
         Idirac = np.zeros(shape)
         Idirac[shape[0]//2,shape[1]//2] = 1
         Ikernel = ski.filters.gaussian(Idirac, sigma=self.gaussflt_sigma)
-        #plt.imshow(Ikernel, cmap='gray')
         return Ikernel
 
-    def preprocess_image(self, I, return_intermediates=False):
+    def preprocess_image(self,
+                         I: ArrayLike,
+                         return_intermediates:bool = False) \
+                            -> Union[NDArray, Tuple[NDArray]]:
+        """Apply preprocessing on an image:
 
+        1. Convert image to grayscale
+        2. Invert the image
+        3. Gaussian filtering
+
+        Parameters
+        ----------
+        I : ArrayLike
+            The input image
+        return_intermediates: bool, optional
+            If False, returns only the output image.
+            If True, returns some intermediate images as well (useful
+            for debugging): `return Ifilt, Iinv, Igray`
+            Defaults to False.
+
+        Returns
+        -------
+        Union[NDArray, Tuple[NDArray]]
+            Either the output image, or a tuple with the output image
+            and some intermediate images, according to `return_intermediates`.
+        """
+
+        # Convert to grayscale
         Igray = ski.color.rgb2gray(I)
-        #plt.imshow(I, cmap='gray')
 
-        # Invert image
+        # Invert pixel values
         maxval = np.max(Igray)
         Iinv = maxval - Igray
 
@@ -47,7 +120,20 @@ class RidgeExtractor:
 
         return peaks, hist
 
-    def get_image_middleband_peaks(self, I):
+    def get_image_middleband_peaks(self, I: ArrayLike) -> NDArray:
+        """Return an image with the midband peaks.
+
+        Parameters
+        ----------
+        I : ArrayLike
+            Input image
+
+        Returns
+        -------
+        NDArray
+            An image with the midband peaks. Useful for debugging.
+        """
+
         # Find starting points from a middle band
         peaks, hist = self._find_starting_points(I)
 
@@ -57,19 +143,80 @@ class RidgeExtractor:
 
         return fig
 
-    def extract_ridges(self, I, return_plot=False):
+    def extract_ridges(self, 
+                       I: ArrayLike,
+                       stop_thresh: float = 0.5,
+                       max_stride: int = 1) -> List[Ridge]:
+        """Extract ridges from the image.
+
+        Starting from the midband peaks, follow the ridge to the right
+        and to the left, until the pixel value drops below `stop_thresh` * max.
+
+        Parameters
+        ----------
+        I : ArrayLike
+            The input image.
+        max_stride: int, optional
+            Search for the next max point in a vertical window [-max_stride, max_stride]
+            around the current height.
+            Defaults to 1.
+        stop_thresh: float, optional
+            Stop when the pixel value drops below `stop_thresh` * max.
+            Defaults to 0.5
+        stop_thresh: float, optional
+            Stop when the pixel value drops below `stop_thresh` * max.
+
+        Returns
+        -------
+        List[Ridge]
+            List of Ridge objects.
+        """
 
         # Find starting points from a middle band
         peaks, _ = self._find_starting_points(I)
 
         # Follow ridges and plot
         band_mid = int(I.shape[1] / 2)  # TODO: make in class
-        ridges = [self._ridge_following(I, [peak, band_mid], stop_thresh=0.5) for peak in peaks]
+        ridges = [self._ridge_following(
+            I, [peak, band_mid], max_stride=max_stride, stop_thresh=stop_thresh) for peak in peaks]
 
         return ridges
 
     @staticmethod
-    def get_image_with_ridges(ridges, I=None, shape=None, fg_color=0, bg_color=1, line=False):
+    def get_image_with_ridges(ridges: Iterable[Ridge],
+                              I: Optional[ArrayLike] = None,
+                              shape: Optional[Sequence] = None,
+                              fg_color: Union[int, Tuple] = 0,
+                              bg_color: Union[int, Tuple] = 1,
+                              line: bool = False) -> NDArray:
+        """Returns an image with overlaid ridges drawn on top.
+
+        Parameters
+        ----------
+        ridges : Iterable[Ridge]
+            Set of ridges
+        I : Optional[ArrayLike], optional
+            The underling image. If None, an image with size `shape` and
+            color `bg_color` is generated.
+            Defaults to None.
+        shape : Optional[Tuple], optional
+            (width, height) of image to generate, if I is None.
+            By default None.
+        fg_color : Union[int, Tuple], optional
+            Color of segments, by default 0
+        bg_color : Union[int, Tuple], optional
+            Color of generated image, if I is None.
+            Can be an int or a tuple of 3 ints (B,G,R)
+            By default 1.
+        line : bool, optional
+            Plot only the points (False) or connect them (True).
+            Defaults to False
+
+        Returns
+        -------
+        NDArray
+            Resulting image.
+        """
 
         # Prepare background image
         if I is not None:
