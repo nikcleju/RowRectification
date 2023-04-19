@@ -41,10 +41,20 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
         # smooth ridges
         if self.smoothing_method == 'pwlf':
-            ridges_smoothed = [ridge.smooth_pwlf(n=self.n_segments, endpoints=[0, I.shape[1]-1], clip_y=[0, I.shape[0]]) for ridge in ridges]
+            ridges_smoothed = [ridge.smooth_pwlf(
+                n=self.n_segments, endpoints=[0, I.shape[1]-1],
+                clip_y=[0, I.shape[0]])
+                    for ridge in ridges]
         elif self.smoothing_method == 'univariate_spline':
-            # k must be for polygonal rectification
-            ridges_smoothed = [ridge.smooth_univariatespline(k=1, s=self.s, endpoints=[0, I.shape[1]-1], clip_y=[0, I.shape[0]]) for ridge in ridges]
+
+            # For poly method, include page endpoints in ridge,
+            # so that the rectification extends to the page limits.
+            # For map method, just use the matching points
+            endpoints = [] if  self.method == 'map' else [0, I.shape[1]-1]
+            ridges_smoothed = [ridge.smooth_univariatespline(
+                k=1, s=self.s, endpoints=endpoints, clip_y=[0, I.shape[0]])
+                    for ridge in ridges]
+
         elif self.smoothing_method is None:
             ridges_smoothed = ridges
         else:
@@ -81,6 +91,7 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
                 return Iout, Isrc_polys, Isrc_ridges, Idst_polys, Idst_ridges
 
             elif self.method == 'map':
+
                 # Source image with ridges and shifts
                 Isrc_ridges = RidgeExtractor.get_image_with_ridges(self.ir.distortion.ridges_, I*255, fg_color=(0,0,255), line=True)
                 Isrc_ridges = self.ir.distortion.get_image_with_shifts(Isrc_ridges, fg_color=(255,0,0))
@@ -91,11 +102,15 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
                 # Rectified image with ridges
                 Idst_ridges = RidgeExtractor.get_image_with_ridges(self.ir.distortion.target_ridges_, 255*Iout, fg_color=(0,0,255), line=True)
 
-                # Displacement x
+                # Displacement
                 Idispl = self.ir.distortion.get_image_with_displacements(I=255*Iout, fg_color=(0,0,255),
                                                                          grid_x=40, grid_y=80)
 
-                return Iout, Isrc_ridges, Idst_ridges, Idispl
+                # Maps
+                map_x, map_y = self.ir.distortion.get_maps(delta=True)
+
+
+                return Iout, Isrc_ridges, Idst_ridges, Idispl, map_x, map_y
             else:
                 raise ValueError(f"Method {self.method} unknown")
         else:
