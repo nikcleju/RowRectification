@@ -15,6 +15,7 @@
 
 import cv2
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 import sklearn
 import sklearn.base
@@ -83,11 +84,7 @@ class Distortion(sklearn.base.BaseEstimator):
                           [target_shape[0]-1] * len(ridges[-1].y)))
 
         # Make ridges horizontal
-        self.target_ridges_ = [r.horizontalize(
-                                        target_y='mean',
-                                        x_start=0,
-                                        x_end=target_shape[1]-1)
-                               for r in self.ridges_]
+        self.target_ridges_ = [r.horizontalize(target_y='mean') for r in self.ridges_]
 
     @property
     def matching_points(self) -> Iterator[Tuple]:
@@ -419,17 +416,30 @@ class DistortionMap(Distortion):
 
         return map_x.astype(np.float32), map_y.astype(np.float32)
 
-    def get_maps(self) -> Tuple[NDArray]:
+    def get_maps(self, delta: bool = False) -> Tuple[NDArray]:
         """Return the splines evaluated in all points of the target image.
         Can be afterwards used with OpenCV remap() to rectify the images.
+
+        Parameters
+        ----------
+        delta: bool, optional
+            If True, subtract x,y values (return only the differences).
+            Defaults to False.
 
         Returns
         -------
         Tuple[NDArray]
             A tuple with the values of the two splines in all points.
         """
-        return self.ev(np.arange(self.target_shape_[1]),
-                       np.arange(self.target_shape_[0]))
+        x = np.arange(self.target_shape_[1])
+        y = np.arange(self.target_shape_[0])
+        y1, y2 = self.ev(x, y)
+
+        xgrid, ygrid = np.meshgrid(x,y)
+        y1 = y1 - xgrid if delta else y1
+        y2 = y2 - ygrid if delta else y2
+
+        return y1,y2
 
     def get_image_with_displacements(self,
                                      I: Optional[ArrayLike] = None,
@@ -502,6 +512,82 @@ class DistortionMap(Distortion):
                                 thickness=thickness)
 
         return Iout
+
+    def plot_3d_splines(self,
+                                     I: Optional[ArrayLike] = None,
+                                     shape: Optional[Tuple] = None,
+                                     grid_x: int = 20,
+                                     grid_y: int = 20,
+                                     fg_color: Union[int, Tuple] = 0,
+                                     bg_color: Union[int, Tuple] = 1,
+                                     thickness: int = 1) -> NDArray:
+        """Returns an image with displacements for points on a grid.
+        Useful for representing the spline mappings.
+
+        Parameters
+        ----------
+        I : Optional[ArrayLike], optional
+            The underling image. If None, an image with size `shape` and
+            color `bg_color` is generated.
+            Defaults to None.
+        shape : Optional[Tuple], optional
+            (width, height) of image to generate, if I is None.
+            By default None.
+        grid_x : int, optional
+            Grid step in horizontal direction, by default 20
+        grid_y : int, optional
+            Grid step in vertical direction, by default 20
+        fg_color : Union[int, Tuple], optional
+            Color of lines, by default 0
+        bg_color : Union[int, Tuple], optional
+            Color of generated image, if I is None.
+            Can be an int or a tuple of 3 ints (B,G,R)
+            By default 1.
+        thickness : int, optional
+            Thickness of line segments, by default 1
+
+        Returns
+        -------
+        NDArray
+            Output image as a numpy array
+
+        Raises
+        ------
+        NotImplementedError
+            If I is None and shape is None.
+        """
+
+        # Prepare background image
+        if I is not None:
+            Iout = np.copy(I)
+        if I is None and shape is not None:
+            Iout = np.zeros(shape) + bg_color
+        elif I is None and shape is None:
+            #max_x = max([max([x for x in ridge.x]) for ridge in ridges])
+            #max_y = max([max([y for y in ridge.y]) for ridge in ridges])
+            #Iout = np.zeros((max_y, max_x))  + bg_color
+            raise NotImplementedError("Not implemented yet, TODO")
+
+        # Compute grid
+        eval_x = np.arange(0, I.shape[1], grid_x)
+        eval_y = np.arange(0, I.shape[0], grid_y)
+        Xgrid, Ygrid = np.meshgrid(eval_x, eval_y)
+
+        # Evaluate splines
+        displ_x, displ_y = self.ev(x=eval_x, y=eval_y)
+
+        # Plot x
+        # fig_x, ax = plt.subplots(subplot_kw={"projection": "3d"})
+        # surf = ax.plot_surface(Xgrid, Ygrid, displ_x - Xgrid, cmap='gray',
+        #                     linewidth=0, antialiased=False)
+        # fig_y, ax = plt.subplots(subplot_kw={"projection": "3d"})
+        # surf = ax.plot_surface(Xgrid, Ygrid, displ_y - Ygrid, cmap='gray',
+        #                     linewidth=0, antialiased=False)
+        fig_x, ax = plt.subplots()
+        CS = ax.contour(Xgrid, Ygrid, displ_y - Ygrid)
+        ax.clabel(CS, inline=True, fontsize=10)
+        ax.set_title('Simplest default with labels')
+        return fig_x, fig_x
 
 #====================
 # Helper functions
