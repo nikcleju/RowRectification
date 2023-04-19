@@ -16,13 +16,13 @@ class Rectifier:
 
 class RectifierPoly(Rectifier):
     def transform(self, I):
-        return rectify_image(I, poly_pairs=self.distortion.poly_pairs)
+        return rectify_image(I, poly_pairs=self.distortion.matching_polys)
 
 class RectifierMap(Rectifier):
     def transform(self, I):
         map_x, map_y = self.distortion.get_maps()
         return cv2.remap(I, map_x, map_y, cv2.INTER_LINEAR)
-        
+
 
 # Rectify a 3 or 4-side polygon
 def rectify_poly(I, poly_src, poly_dst, Iout_shape=None):

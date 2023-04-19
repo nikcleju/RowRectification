@@ -39,7 +39,7 @@ class Ridge:
         return cls([p[0] for p in points], [p[1] for p in points])
 
     def __iter__(self) -> Generator:
-        """Returns an iterator to iterate through the pairs (x,y) pairs on the
+        """Returns an iterator to iterate through the points (x,y) on the
         ridge.
 
         Returns

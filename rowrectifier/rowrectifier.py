@@ -67,7 +67,7 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
                 Idst_ridges = RidgeExtractor.get_image_with_ridges(self.ir.distortion.target_ridges_, 255*Iout, fg_color=(0,0,255), line=True)
 
                 return Iout, Isrc_polys, Isrc_ridges, Idst_polys, Idst_ridges
-            
+
             elif self.method == 'map':
                 # Source image with ridges and shifts
                 Isrc_ridges = RidgeExtractor.get_image_with_ridges(self.ir.distortion.ridges_, I*255, fg_color=(0,0,255), line=True)
@@ -81,7 +81,7 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
                 # Displacement x
                 Idispl = self.ir.distortion.get_image_with_displacements(I=255*Iout, fg_color=(0,0,255),
-                                                                         grid_x=40, grid_y=80)  
+                                                                         grid_x=40, grid_y=80)
 
                 return Iout, Isrc_ridges, Idst_ridges, Idispl
             else:
