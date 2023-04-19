@@ -23,12 +23,21 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
 
         self.ir = None
 
-    def fit(self, I):
+    def fit(self, I, return_intermediates=False):
 
         # 1. Preprocess and extract ridges
         extr = RidgeExtractor()
-        Ifilt = extr.preprocess_image(I)
+        if return_intermediates:
+            Ifilt, Iinv, Igray = extr.preprocess_image(I, return_intermediates=True)
+            Ikernel = extr.get_image_kernel((200,200))
+            Ipeaks = extr.plot_middleband_peaks(Ifilt)
+        else:
+            Ifilt = extr.preprocess_image(I, return_intermediates=False)
+
         ridges = extr.extract_ridges(Ifilt)
+        if return_intermediates:
+            Ifiltridges = extr.get_image_with_ridges(ridges, Ifilt, line=True)
+
 
         # smooth ridges
         if self.smoothing_method == 'pwlf':
@@ -47,6 +56,9 @@ class RowRectifier(sklearn.base.BaseEstimator, sklearn.base.TransformerMixin):
         elif self.method == 'map':
             self.ir = RectifierMap(DistortionMap(delta=self.delta))
         self.ir.fit(I, ridges=ridges_smoothed)
+
+        if return_intermediates:
+            return Ifiltridges, Ifilt, Iinv, Igray, Ikernel, Ipeaks
 
     def transform(self, I, return_intermediates=False):
         Iout = self.ir.transform(I)

@@ -120,7 +120,7 @@ class RidgeExtractor:
 
         return peaks, hist
 
-    def get_image_middleband_peaks(self, I: ArrayLike) -> NDArray:
+    def plot_middleband_peaks(self, I: ArrayLike) -> Any:
         """Return an image with the midband peaks.
 
         Parameters
@@ -130,8 +130,8 @@ class RidgeExtractor:
 
         Returns
         -------
-        NDArray
-            An image with the midband peaks. Useful for debugging.
+        Any
+            Matplotlib Figure object with the midband peaks. Useful for debugging.
         """
 
         # Find starting points from a middle band
