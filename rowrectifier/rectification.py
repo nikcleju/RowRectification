@@ -143,6 +143,7 @@ def rectify_poly(I: ArrayLike,
     else:
         raise NotImplementedError("Transformation for this polygon length not implemented")
 
+    m = poly_dst.mean(axis=0, dtype=int)
     return Irectif
 
 def rectify_image(I: ArrayLike,

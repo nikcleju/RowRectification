@@ -40,7 +40,7 @@ class RidgeExtractor:
     4. Identify peaks inside a band in the middle of the image
     5. Follow ridges to the right and left
     """
-    def __init__(self, gaussflt_sigma: Sequence = [5,50]) -> None:
+    def __init__(self, gaussflt_sigma: Sequence = [5,30]) -> None:
         """Constructor
 
         Parameters
@@ -111,12 +111,19 @@ class RidgeExtractor:
         else:
             return Ifilt
 
-    def _find_starting_points(self, I):
+    def _find_starting_points(self, I, stop_thresh=None):
         # Find starting points from a middle band
         band_mid = int(I.shape[1] / 2)
         band_halfwidth = 50
         hist = np.sum(I[:, band_mid-band_halfwidth:band_mid+band_halfwidth], axis=1)
+
+        # Detrend??
+        hist = scipy.signal.detrend(hist)
+
         peaks, _ = scipy.signal.find_peaks(hist)
+
+        if stop_thresh is not None:
+            peaks = peaks[hist[peaks] > stop_thresh * max(hist[peaks])]
 
         return peaks, hist
 
@@ -135,7 +142,9 @@ class RidgeExtractor:
         """
 
         # Find starting points from a middle band
-        peaks, hist = self._find_starting_points(I)
+        # Adaptive histogram equalization
+        I = ski.exposure.equalize_adapthist(I)
+        peaks, hist = self._find_starting_points(I, stop_thresh=0.35)
 
         fig, ax = plt.subplots()
         ax.plot(hist)
@@ -172,8 +181,12 @@ class RidgeExtractor:
             List of Ridge objects.
         """
 
+        # Adaptive histogram equalization
+        I = ski.exposure.equalize_adapthist(I)
+
         # Find starting points from a middle band
-        peaks, _ = self._find_starting_points(I)
+        # TODO: make parameter
+        peaks, _ = self._find_starting_points(I, stop_thresh=0.35)
 
         # Follow ridges and plot
         band_mid = int(I.shape[1] / 2)  # TODO: make in class

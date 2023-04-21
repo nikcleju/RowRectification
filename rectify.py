@@ -30,8 +30,13 @@ def rectify(inpath, outpath):
         Img = plt.imread(fpath)
 
         # Rectify
-        rr = RowRectifier(method='univariate_spline', 
+        # rr = RowRectifier(method='map', smoothing_method='univariate_spline',
+        #                   s=None, n_poly_sides=3)
+        # rr = RowRectifier(method='poly', smoothing_method='pwlf', n_segments=4,
+        #                   s=None, n_poly_sides=3)
+        rr = RowRectifier(method='poly', smoothing_method='univariate_spline',
                           s=None, n_poly_sides=3)
+
         rr.fit(Img)
         # Iout, Isrc_polys, Isrc_ridges, Idst_polys, Idst_ridges = \
         #     rr.transform(Img, return_intermediates=True)
@@ -41,6 +46,7 @@ def rectify(inpath, outpath):
         if outpath is not None:
             outfilename = Path.joinpath(Path(outpath), Path(outfilename))
 
+        print(f"Saving image {outfilename}")
         plt.imsave(outfilename, Iout)
 
 if __name__ == "__main__":

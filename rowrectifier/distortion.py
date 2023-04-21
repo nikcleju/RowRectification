@@ -16,6 +16,7 @@
 import cv2
 import math
 import matplotlib.pyplot as plt
+from more_itertools import peekable
 import numpy as np
 import sklearn
 import sklearn.base
@@ -24,7 +25,7 @@ from typing import Tuple, Sequence, Iterator, Optional, Union
 from numpy.typing import ArrayLike, NDArray
 
 from itertools import pairwise
-from scipy.interpolate import SmoothBivariateSpline
+from scipy.interpolate import SmoothBivariateSpline, LinearNDInterpolator, CloughTocher2DInterpolator
 
 from .ridge import Ridge
 
@@ -33,8 +34,15 @@ class Distortion(sklearn.base.BaseEstimator):
     and ridges.
     """
 
-    def __init__(self) -> None:
-        """_summary_
+    def __init__(self, include_edges: bool = False, margin: int = 0) -> None:
+        """Constructor
+
+        Parameters
+        ----------
+        include_edges : bool, optional
+            Map the top and bottom edges of the initial image to the
+            top and bottom edges of the final image, by default False.
+            If True, adds them to `ridges`.
         """
         super().__init__()
 
@@ -42,11 +50,12 @@ class Distortion(sklearn.base.BaseEstimator):
         self.ridges_ = None
         self.target_ridges_ = None
         self.target_shape_ = None
+        self.include_edges = include_edges
+        self.margin = margin
 
     def fit(self,
             ridges: Sequence[Ridge],
-            target_shape:  Tuple,
-            include_edges: bool = True) -> None:
+            target_shape:  Tuple) -> None:
         """Computes matching horizontal ridges for the provided ridges.
 
         Parameters
@@ -59,29 +68,29 @@ class Distortion(sklearn.base.BaseEstimator):
         include_edges : bool, optional
             Map the top and bottom edges of the initial image to the
             top and bottom edges of the final image, by default True.
-            If True, adds them to `ridges`
+            If True, adds them to `ridges`.
         """
 
         self.ridges_ = ridges
         self.target_shape_ = target_shape
 
         # Add top and bottom margins as ridges
-        if include_edges:
+        if self.include_edges:
             # Append only corners?
             append_only_corners = False  # Not working only with corners
             if append_only_corners:
                 self.ridges_.insert(0, Ridge.from_points(
-                                    [[0,0],
-                                    [target_shape[1]-1, 0]]))
+                                    [[0-self.margin,0-self.margin],
+                                    [target_shape[1]-1+self.margin, 0-self.margin]]))
                 self.ridges_.append(Ridge.from_points(
-                                    [[0, target_shape[0]-1],
-                                    [target_shape[1]-1, target_shape[0]-1]]))
+                                    [[0-self.margin, target_shape[0]-1+self.margin],
+                                    [target_shape[1]-1+self.margin, target_shape[0]-1+self.margin]]))
             else:
                 self.ridges_.insert(
-                    0, Ridge(ridges[0].x, [0] * len(ridges[0].y)))
+                    0, Ridge(ridges[0].x, [-self.margin] * len(ridges[0].y)))
                 self.ridges_.append(
                     Ridge(ridges[-1].x,
-                          [target_shape[0]-1] * len(ridges[-1].y)))
+                          [target_shape[0]-1+self.margin] * len(ridges[-1].y)))
 
         # Make ridges horizontal
         self.target_ridges_ = [r.horizontalize(target_y='mean') for r in self.ridges_]
@@ -156,12 +165,25 @@ class Distortion(sklearn.base.BaseEstimator):
             raise NotImplementedError("Not implemented yet, TODO")
 
         # Draw the lines
+        # Xquiver = []
+        # Yquiver = []
+        # Uquiver = []
+        # Vquiver = []
         for ridge_src, ridge_dst in zip(self.ridges_, self.target_ridges_):
             for p_src, p_dst in zip(ridge_src, ridge_dst):
                 Iout = cv2.line(Iout,
                                 list(map(int,p_src)), list(map(int,p_dst)),
                                 color=fg_color, thickness=thickness)
+
+        #         Xquiver.append(p_src[0])
+        #         Yquiver.append(p_src[1])
+        #         Uquiver.append(p_dst[0] - [p_src[0]])
+        #         Vquiver.append(p_dst[1] - [p_src[1]])
+        # fig = plt.imshow(I)
+        # fig = plt.quiver(Xquiver, Yquiver, Uquiver, Vquiver, angles='xy')
+
         return Iout
+        # return fig
 
 
 class DistortionPoly(Distortion):
@@ -171,7 +193,9 @@ class DistortionPoly(Distortion):
 
     def __init__(self, 
                  n_poly_sides: int = 3, 
-                 tolerance: Optional[float] = None) -> None:
+                 tolerance: Optional[float] = None,
+                 include_edges: bool = False,
+                 margin: int = 0) -> None:
         """Constructor
 
         Parameters
@@ -185,7 +209,7 @@ class DistortionPoly(Distortion):
             Defaults to None.
         """
 
-        super().__init__()
+        super().__init__(include_edges=include_edges, margin=margin)
         self.n_poly_sides = n_poly_sides
         self.tolerance = tolerance
 
@@ -224,6 +248,7 @@ class DistortionPoly(Distortion):
         elif self.n_poly_sides == 3:
             # Get triangular mesh between two ridges only, with OpenCV
 
+            iband = 1
             for (src_ridge1, src_ridge2), (dst_ridge1, dst_ridge2) \
               in zip(pairwise(self.ridges_), pairwise(self.target_ridges_)):
 
@@ -233,19 +258,31 @@ class DistortionPoly(Distortion):
                     [dst_ridge1.to_numpy(), dst_ridge2.to_numpy()])
 
                 # Create triangles
-                for indices in get_triangulation_indices(points_dst_all):
-
+                counttr  = 0
+                #for indices in get_triangulation_indices(points_dst_all):
+                for indices in get_triangulation_band(dst_ridge1, dst_ridge2):
+                    counttr = counttr+1
                     if self.tolerance is not None:
                         # Skip degenerate triangles (area too small)
-                        p1,p2,p3 = tuple(points_src_all[indices])
-                        if area_triangle(p1,p2,p3) < self.tolerance:
+                        src_p1,src_p2,src_p3 = tuple(points_src_all[indices])
+                        dst_p1,dst_p2,dst_p3 = tuple(points_dst_all[indices])
+                        if area_triangle(src_p1,src_p2,src_p3) < self.tolerance:
                             # TODO: replace print with logging
-                            print(f"Degenerate src triangle: {p1}, {p2}, {p3}, area={area_triangle(p1,p2,p3)}")
-                        p1,p2,p3 = tuple(points_dst_all[indices])
-                        if area_triangle(p1,p2,p3) < 1:
-                            print(f"Degenerate dst triangle: {p1}, {p2}, {p3}, area={area_triangle(p1,p2,p3)}")
+                            print(f"Degenerate src triangle: {src_p1}, {src_p2}, {src_p3}, area={area_triangle(src_p1,src_p2,src_p3)}")
+                            print(f" -- Corresponding dst triangle: {dst_p1}, {dst_p2}, {dst_p3}, area={area_triangle(dst_p1,dst_p2,dst_p3)}")
+
+                        if area_triangle(dst_p1,dst_p2,dst_p3) < 1:
+                            print(f"Degenerate dst triangle: {dst_p1}, {dst_p2}, {dst_p3}, area={area_triangle(dst_p1,dst_p2,dst_p3)}")
+                            print(f" -- Corresponding src triangle: {src_p1}, {src_p2}, {src_p3}, area={area_triangle(src_p1,src_p2,src_p3)}")
 
                     yield points_src_all[indices], points_dst_all[indices]
+
+                    # psrc = sorted(points_src_all[indices], key=lambda p: (p[0], p[1]))
+                    # pdst = sorted(points_dst_all[indices], key=lambda p: (p[0], p[1]))
+                    # yield psrc, pdst
+                #print(f"Band {iband}: {counttr} triangles")
+                iband = iband + 1
+
         else:
             raise ValueError(f"n_poly_sides must be 3 or 4, is {self.n_poly_sides}")
 
@@ -336,7 +373,12 @@ class DistortionMap(Distortion):
 
     """
 
-    def __init__(self, delta: bool = False, margin: float = 200) -> None:
+    def __init__(self, 
+                 delta: bool = False, 
+                 kx: int = 3,
+                 ky: int = 3,
+                 margin: float = 200,
+                 include_edges: bool = False) -> None:
         """Constructor
 
         Parameters
@@ -351,8 +393,10 @@ class DistortionMap(Distortion):
             By default equal to 200.
 
         """
-        super().__init__()
+        super().__init__(include_edges=include_edges)  # TODO: pass margin?
         self.delta = delta
+        self.kx = kx
+        self.ky = ky
         self.margin = margin
 
     def fit_splines(self) -> None:
@@ -379,9 +423,15 @@ class DistortionMap(Distortion):
 
         # Find the splines
         self.spl_x_ = SmoothBivariateSpline(
-            in_x, in_y, target_x, bbox=bbox, kx=3, ky=3)   # s = ...
+            in_x, in_y, target_x, bbox=bbox, kx=self.kx, ky=self.ky, s=10*len(in_x))   # s = ...
         self.spl_y_ = SmoothBivariateSpline(
-            in_x, in_y, target_y, bbox=bbox, kx=3, ky=3)   # s = ...
+            in_x, in_y, target_y, bbox=bbox, kx=self.kx, ky=self.ky, s=10*len(in_x))   # s = ...
+
+        points = list(zip(in_x, in_y))
+        # self.spl_x_ = LinearNDInterpolator(points, target_x, fill_value=0)
+        # self.spl_y_ = LinearNDInterpolator(points, target_y, fill_value=0)
+        self.spl_x_ = CloughTocher2DInterpolator(points, target_x, fill_value=0)
+        self.spl_y_ = CloughTocher2DInterpolator(points, target_y, fill_value=0)
 
     def ev(self,
            x: ArrayLike,
@@ -406,8 +456,10 @@ class DistortionMap(Distortion):
         if not hasattr(self, 'spl_x_') or not hasattr(self, 'spl_y_'):
             self.fit_splines()
 
-        map_x = self.spl_x_(x, y).T
-        map_y = self.spl_y_(x, y).T
+        #map_x = self.spl_x_(x, y).T
+        #map_y = self.spl_y_(x, y).T
+        map_x = self.spl_x_(*np.meshgrid(x,y))
+        map_y = self.spl_y_(*np.meshgrid(x,y))
 
         xmesh, ymesh = np.meshgrid(x, y)
 
@@ -592,6 +644,37 @@ class DistortionMap(Distortion):
 #====================
 # Helper functions
 #====================
+
+def get_triangulation_band(ridge1, ridge2):
+    """Get indices triples for every triangle
+    """
+
+    points_all = np.concatenate(
+        [ridge1.to_numpy(), ridge2.to_numpy()])
+
+    rdg1 = peekable(iter(ridge1))
+    rdg2 = peekable(iter(ridge2))
+    p1 = next(rdg1)
+    p2 = next(rdg2)
+    p1next = rdg1.peek(np.inf)
+    p2next = rdg2.peek(np.inf)
+
+    while (p1next != np.inf or p2next != np.inf):
+
+        if np.linalg.norm(np.array(p1next) - np.array(p2)) < np.linalg.norm(np.array(p2next) - np.array(p1)):
+            triangle = [p1, p1next, p2]
+            p1 = next(rdg1)
+        else:
+            triangle = [p1, p2, p2next]
+            p2 = next(rdg2)
+
+        # Get index of points
+        yield [(points_all==point).all(axis=1).nonzero()[0][0] for point in triangle]
+
+        p1next = rdg1.peek(np.inf)
+        p2next = rdg2.peek(np.inf)
+
+    #raise StopIteration
 
 def get_triangulation_indices(points):
     """Get indices triples for every triangle
